@@ -11,7 +11,7 @@ regimens.
 
 ## Status
 
-Pre-release (v0.1.0). Associated methods paper in preparation.
+Pre-release (v0.1.0).
 
 ## Install
 
