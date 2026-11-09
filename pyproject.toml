@@ -51,8 +51,9 @@ dependencies = [
 # Pull in torch + fair-esm only if the user wants to run `envoy embed` locally.
 embed = [
     "torch>=2.1",
-    "fair-esm>=2.0.0",
+    "transformers>=4.40",
 ]
+
 # Dev-time tooling.
 dev = [
     "pytest>=7.4",
