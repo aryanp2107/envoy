@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+build/
+dist/
+.installed.cfg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Package development
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Data — Envoy does NOT ship sequences, embeddings, or results in the package
+# Users supply their own data; examples/tiny_clade/ is the only bundled data
+data/
+results/
+*.fasta
+*.fa
+*.fas
+*.npy
+*.pkl
+*.h5
+*.hdf5
+
+# BUT allow the bundled example data (only exceptions)
+!examples/**/*.fasta
+!examples/**/*.tsv
+!examples/**/*.csv

@@ -1,0 +1,1 @@
+"""Command-line interface for ENVOY. The `envoy` entry point is defined in main.py."""

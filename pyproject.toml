@@ -1,0 +1,105 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "envoy-hiv"
+version = "0.1.0"
+description = "ENVOY: embedding-based selection of authentic HIV-1 Env representatives for cross-clade immunogen panels"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Aryan Patel", email = "patel.aryana@northeastern.edu" },
+]
+keywords = [
+    "hiv",
+    "env",
+    "bioinformatics",
+    "clustering",
+    "k-medoids",
+    "protein-language-models",
+    "esm-2",
+    "immunogen-design",
+    "vaccine",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core dependencies — enough to run qc, dedup, cluster, figures, divergence.
+# Embedding (which needs torch) is an optional extra.
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "scipy>=1.11",
+    "scikit-learn>=1.3",
+    "scikit-learn-extra>=0.3",
+    "biopython>=1.83",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+# Pull in torch + fair-esm only if the user wants to run `envoy embed` locally.
+embed = [
+    "torch>=2.1",
+    "fair-esm>=2.0.0",
+]
+# Dev-time tooling.
+dev = [
+    "pytest>=7.4",
+    "black>=24.0",
+    "ruff>=0.5",
+]
+# Convenience: install everything.
+all = [
+    "envoy-hiv[embed,dev]",
+]
+
+[project.urls]
+Homepage = "https://github.com/aryanp2107/envoy"
+Repository = "https://github.com/aryanp2107/envoy"
+Issues = "https://github.com/aryanp2107/envoy/issues"
+Documentation = "https://github.com/aryanp2107/envoy#readme"
+
+# The single `envoy` CLI entry point. Subcommands (qc, dedup, embed, cluster,
+# figures, divergence) are dispatched by envoy/cli/main.py.
+[project.scripts]
+envoy = "envoy.cli.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["envoy"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/envoy",
+    "/examples",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]  # line length handled by black
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
