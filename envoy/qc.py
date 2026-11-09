@@ -24,6 +24,7 @@ from Bio import SeqIO
 from Bio.Seq import Seq
 
 from envoy.hypermut import detect_from_fasta
+from envoy.accession import IDStrategy, normalize_accession
 
 
 # HXB2 Env CDS coordinates (standard reference)
@@ -123,6 +124,7 @@ def run_gates(
     clade: str,
     output_dir: str | Path,
     hypermut_p_threshold: float = 0.05,
+    id_strategy: IDStrategy = IDStrategy.AUTO,
 ) -> pd.DataFrame:
     """
     Run all QC gates on an input FASTA and write pass/fail outputs.
@@ -140,10 +142,10 @@ def run_gates(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read input sequences
+    # Read input sequences with configurable ID normalization
     sequences: dict[str, str] = {}
     for rec in SeqIO.parse(str(input_fasta), "fasta"):
-        acc = rec.id.split(".")[-1] if "." in rec.id else rec.id
+        acc = normalize_accession(rec.description, id_strategy)
         sequences[acc] = str(rec.seq).upper()
 
     # Gates 6, 1, 2, 3, 4 per sequence

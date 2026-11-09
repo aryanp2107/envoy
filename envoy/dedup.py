@@ -28,6 +28,8 @@ from envoy.metadata_io import (
     resolve_standard_columns,
 )
 
+from envoy.accession import IDStrategy, normalize_accession
+
 
 @dataclass
 class ClusterCollapse:
@@ -39,9 +41,12 @@ class ClusterCollapse:
     smart_pick_reason: str  # which rule triggered the representative choice
 
 
-def _parse_clstr(clstr_path: Path) -> list[list[tuple[str, int]]]:
+def _parse_clstr(clstr_path: Path, id_strategy: IDStrategy = IDStrategy.AUTO) -> list[list[tuple[str, int]]]:
     """
     Parse a CD-HIT .clstr file.
+
+    CD-HIT writes full FASTA headers (potentially LANL-dotted) in .clstr output.
+    Accessions are normalized via `id_strategy` so they match metadata keys.
 
     Returns a list of clusters; each cluster is a list of (accession, length) tuples.
     """
@@ -59,7 +64,8 @@ def _parse_clstr(clstr_path: Path) -> list[list[tuple[str, int]]]:
                 m = seq_pattern.match(line)
                 if m:
                     length = int(m.group(1))
-                    acc = m.group(2)
+                    raw_acc = m.group(2)
+                    acc = normalize_accession(raw_acc, id_strategy)
                     current.append((acc, length))
     if current:
         clusters.append(current)
@@ -128,6 +134,7 @@ def run(
     output_dir: str | Path,
     identity_threshold: float = 0.98,
     n_threads: int = 4,
+    id_strategy: IDStrategy = IDStrategy.AUTO,
 ) -> pd.DataFrame:
     """
     Run CD-HIT-EST deduplication with smart-pick representative selection.
@@ -194,7 +201,7 @@ def run(
     if produced_clstr.exists() and produced_clstr != cdhit_clstr:
         produced_clstr.rename(cdhit_clstr)
 
-    clusters_raw = _parse_clstr(cdhit_clstr)
+    clusters_raw = _parse_clstr(cdhit_clstr, id_strategy=id_strategy)
 
     # Load metadata for smart-pick
     raw_meta = pd.read_csv(raw_metadata_tsv, sep="\t", skiprows=2, low_memory=False)
@@ -232,7 +239,7 @@ def run(
     # (CD-HIT by default picks the longest; our smart-pick may differ)
     all_nt: dict[str, str] = {}
     for rec in SeqIO.parse(str(input_nt_fasta), "fasta"):
-        acc = rec.id.split(".")[-1] if "." in rec.id else rec.id
+        acc = normalize_accession(rec.description, id_strategy)
         all_nt[acc] = str(rec.seq).upper()
 
     with open(cdhit_out, "w") as fh:
@@ -243,7 +250,7 @@ def run(
     # Matching protein FASTA
     all_prot: dict[str, str] = {}
     for rec in SeqIO.parse(str(input_protein_fasta), "fasta"):
-        acc = rec.id.split(".")[-1] if "." in rec.id else rec.id
+        acc = normalize_accession(rec.description, id_strategy)
         all_prot[acc] = str(rec.seq)
 
     prot_out = output_dir / f"{clade}.cdhit98.protein.fasta"

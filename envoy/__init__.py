@@ -10,6 +10,8 @@ Public API (available once Delivery 2+ lands):
     envoy.divergence  — identity-vs-embedding divergence analysis
 """
 
+from envoy.accession import IDStrategy, normalize_accession
+
 __version__ = "0.1.0"
 
 __all__ = ["__version__"]
