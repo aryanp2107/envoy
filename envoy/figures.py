@@ -69,7 +69,27 @@ def plot_sweep_metrics(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+    # X-axis range: clip strictly to the k values actually tested
+    k_min = int(sweep_df["k"].min())
+    k_max = int(sweep_df["k"].max())
+    k_pad = max(1, (k_max - k_min) * 0.03)
+    x_left = k_min - k_pad
+    x_right = k_max + k_pad
+
+    # Overcluster shading: only draw when the threshold falls inside the tested range
     overcluster_threshold = n_sequences / 4
+    show_overcluster = overcluster_threshold < k_max
+
+    def _shade_overcluster(ax, label=None):
+        if show_overcluster:
+            ax.axvspan(
+                overcluster_threshold,
+                x_right,
+                color=OVERCLUSTER_COLOR,
+                alpha=0.08,
+                label=label,
+            )
 
     # Panel 1: silhouette vs k
     ax = axes[0, 0]
@@ -106,7 +126,8 @@ def plot_sweep_metrics(
         linewidth=1.2,
         label=f"Deployment k={deployment_k}",
     )
-    ax.axvspan(overcluster_threshold, sweep_df["k"].max() + 1, color=OVERCLUSTER_COLOR, alpha=0.08)
+    _shade_overcluster(ax)
+    ax.set_xlim(x_left, x_right)
     ax.set_title("Silhouette vs k", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("Silhouette")
@@ -142,7 +163,8 @@ def plot_sweep_metrics(
             label="Random ±1σ",
         )
     ax.axvline(deployment_k, color=DEPLOY_LINE_COLOR, linestyle=":", linewidth=1.2)
-    ax.axvspan(overcluster_threshold, sweep_df["k"].max() + 1, color=OVERCLUSTER_COLOR, alpha=0.08)
+    _shade_overcluster(ax)
+    ax.set_xlim(x_left, x_right)
     ax.set_title("Coverage vs k", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("Mean nearest-medoid distance")
@@ -181,7 +203,8 @@ def plot_sweep_metrics(
         )
     ax.axhline(50, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
     ax.axvline(deployment_k, color=DEPLOY_LINE_COLOR, linestyle=":", linewidth=1.2)
-    ax.axvspan(overcluster_threshold, sweep_df["k"].max() + 1, color=OVERCLUSTER_COLOR, alpha=0.08)
+    _shade_overcluster(ax)
+    ax.set_xlim(x_left, x_right)
     ax.set_title("PAM-vs-random   (% baselines beaten)", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("% random panels beaten")
@@ -200,18 +223,9 @@ def plot_sweep_metrics(
         markersize=6,
         label="PAM",
     )
-    if "random_silhouette_mean" in sweep_df.columns:
-        # Random inertia mean can be derived as current_cost at mean distance
-        # but we didn't store it; so skip the random band here
-        pass
     ax.axvline(deployment_k, color=DEPLOY_LINE_COLOR, linestyle=":", linewidth=1.2)
-    ax.axvspan(
-        overcluster_threshold,
-        sweep_df["k"].max() + 1,
-        color=OVERCLUSTER_COLOR,
-        alpha=0.08,
-        label="k > N/4 (overcluster)",
-    )
+    _shade_overcluster(ax, label="k > N/4 (overcluster)")
+    ax.set_xlim(x_left, x_right)
     ax.set_title("Inertia vs k", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("Total inertia")
@@ -404,10 +418,14 @@ def plot_dendrogram(
     cluster_assignments: np.ndarray,
     output_path: str | Path,
     dataset_name: str = "",
-    max_display: int = 500,
+    max_display: int = 150,
 ) -> None:
     """
     UPGMA dendrogram with cluster-colored leaf labels and medoid asterisks.
+
+    Horizontal orientation so leaf labels stay readable. If n > max_display,
+    the leaves are downsampled (all medoids kept; non-medoids randomly sampled)
+    to the display budget for legibility.
 
     Args:
         distance_matrix: (n, n) precomputed distances
@@ -416,111 +434,88 @@ def plot_dendrogram(
         cluster_assignments: (n,) cluster labels
         output_path: where to save
         dataset_name: optional title suffix
-        max_display: if n > max_display, down-sample leaves to this many (keeping
-                     all medoids). Avoids unreadable 3000-leaf dendrograms.
+        max_display: if n > max_display, down-sample leaves to this many
+                     (keeping all medoids). Default 150 is the ceiling for
+                     readable horizontal labels.
     """
+    from scipy.spatial.distance import squareform
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     n = len(accessions)
     k = len(medoid_indices)
+    medoid_set = set(medoid_indices.tolist())
 
-    # Down-sample if too large
+    # Downsample to max_display, always keeping medoids
     if n > max_display:
-        np.random.seed(0)
-        keep_mask = np.zeros(n, dtype=bool)
-        keep_mask[medoid_indices] = True
-        n_non_medoid_to_keep = max_display - k
+        rng = np.random.default_rng(42)
         non_medoid_indices = np.setdiff1d(np.arange(n), medoid_indices)
-        sampled = np.random.choice(non_medoid_indices, size=n_non_medoid_to_keep, replace=False)
-        keep_mask[sampled] = True
-        display_idx = np.where(keep_mask)[0]
+        n_non_medoid_slots = max_display - k
+        sampled = rng.choice(
+            non_medoid_indices, size=n_non_medoid_slots, replace=False
+        )
+        display_idx = np.sort(np.concatenate([medoid_indices, sampled]))
     else:
         display_idx = np.arange(n)
 
     # Build linkage from condensed distance vector
-    from scipy.spatial.distance import squareform
-
     D_sub = distance_matrix[np.ix_(display_idx, display_idx)]
     condensed = squareform(D_sub, checks=False)
     linkage_matrix = linkage(condensed, method="average")
 
-    k_eff = k
-    cmap = plt.get_cmap("tab20", k_eff)
+    # Build labels + per-cluster color map for the displayed subset
+    cmap = plt.get_cmap("tab20", max(20, k))
     label_colors = {}
     labels = []
-    for i, orig_idx in enumerate(display_idx):
+    for orig_idx in display_idx:
         c = cluster_assignments[orig_idx]
-        is_medoid = orig_idx in medoid_indices
+        is_medoid = orig_idx in medoid_set
         prefix = "* " if is_medoid else "  "
         acc = accessions[orig_idx]
         labels.append(f"{prefix}{acc}")
         label_colors[acc] = cmap(c % 20)
 
-    # Compute linkage heights for scale-aware Y-axis
+    # Scale-aware sizing: clip x-axis to p95 of linkage heights so one outlier
+    # branch doesn't compress the main tree
     heights = linkage_matrix[:, 2]
-    y_main = float(np.percentile(heights, 95))  # main tree ceiling, excludes outliers
-    y_max = float(heights.max())
-    y_has_outliers = y_max > y_main * 1.5
+    y_main = float(np.percentile(heights, 95))
 
-    # Figure sizing: horizontal dendrogram for small N, vertical for large
-    use_horizontal = len(display_idx) <= 100
+    # Always horizontal: leaves stack top-to-bottom at 0.18" per row,
+    # width scales with the cosine-distance range (capped for page fit)
     n_leaves = len(display_idx)
-
-    if use_horizontal:
-        # Horizontal: leaves run down the y-axis, dendrogram extends left
-        width = max(10, y_main * 400)  # proportional to data range
-        height = max(6, 0.22 * n_leaves)
-    else:
-        width = max(14, 0.3 * n_leaves)
-        height = max(6, y_main * 400)
+    width = max(10, min(y_main * 500, 20))
+    height = max(6, 0.18 * n_leaves)
 
     fig, ax = plt.subplots(figsize=(width, height))
     with plt.rc_context({"lines.linewidth": 0.8}):
         dendrogram(
             linkage_matrix,
             labels=labels,
-            leaf_rotation=0 if use_horizontal else 90,
-            leaf_font_size=8,
+            leaf_rotation=0,
+            leaf_font_size=7,
             color_threshold=0,
             above_threshold_color="#888888",
             ax=ax,
-            orientation="left" if use_horizontal else "top",
+            orientation="left",
         )
 
-    # Clip the scale axis to main tree; annotate if outliers were clipped
-    if use_horizontal:
-        scale_axis_set = ax.set_xlim
-        scale_axis_label = ax.set_xlabel
-        scale_axis_label_text = "Cosine distance (average linkage)"
-        ax.set_xlim(0, y_main * 1.05)
-    else:
-        scale_axis_set = ax.set_ylim
-        scale_axis_label = ax.set_ylabel
-        scale_axis_label_text = "Cosine distance (average linkage)"
-        ax.set_ylim(0, y_main * 1.05)
+    ax.set_xlim(0, y_main * 1.05)
+    ax.set_xlabel("Cosine distance (UPGMA average linkage)")
 
-    scale_axis_label(scale_axis_label_text)
-
-    # Re-color tick labels per cluster
-    tick_labels = ax.get_yticklabels() if use_horizontal else ax.get_xticklabels()
-    for lbl in tick_labels:
+    # Re-color tick labels per cluster; bold medoids
+    for lbl in ax.get_yticklabels():
         txt = lbl.get_text()
         acc = txt.lstrip("*").strip()
         if acc in label_colors:
             lbl.set_color(label_colors[acc])
-        if txt.startswith("*"):
+        if txt.strip().startswith("*"):
             lbl.set_fontweight("bold")
 
     suffix = f": {dataset_name}" if dataset_name else ""
     title_bits = [f"UPGMA dendrogram{suffix}", f"k={k}", "medoids = *"]
     if len(display_idx) < n:
-        title_bits.append(f"showing {len(display_idx)} of {n} leaves")
-    if y_has_outliers:
-        logger.debug(
-            "Dendrogram y-axis clipped at p95=%.4f (max in data was %.4f)",
-            y_main, y_max,
-        )
+        title_bits.append(f"showing {len(display_idx)} of {n} leaves (medoids kept)")
     ax.set_title("  |  ".join(title_bits), fontsize=11)
 
     fig.tight_layout()
