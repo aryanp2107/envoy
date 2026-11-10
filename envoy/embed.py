@@ -7,6 +7,9 @@ suitable for downstream clustering. Device selection priority: CUDA → MPS → 
 Mean-pooling convention: pools over positions 1 to seq_len+1, excluding the BOS
 token (position 0) and all padding tokens. This matches the Phase B.1 AMP
 validation protocol and must not be changed without re-validating.
+
+Original headers from upstream dedup (if available) are propagated forward as
+<output_npy_stem>.accessions.tsv for downstream study traceability.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import torch
 from Bio import SeqIO
 from torch.utils.data import DataLoader
@@ -86,6 +90,62 @@ def _warn_cpu_slow(model: ESM2Model, n_sequences: int) -> None:
         "at reduced embedding quality, or use a CUDA/MPS-capable machine.",
         model.value, per_seq, est_min, n_sequences,
     )
+
+
+def _load_dedup_sidecar(
+    protein_fasta_path: Path,
+    explicit_sidecar_path: Optional[Path] = None,
+) -> dict[str, str]:
+    """
+    Load the accession → original_header map from the upstream dedup sidecar.
+
+    Discovery logic:
+      1. If explicit_sidecar_path is given and exists, use it.
+      2. Otherwise, infer from the protein FASTA path.
+         Dedup writes <clade>.cdhit98.protein.fasta alongside
+         <clade>.cdhit98.accessions.tsv, so we strip ".protein" from the stem
+         and look for ".accessions.tsv".
+
+    Returns empty dict if no sidecar is found or the file lacks the
+    original_header column (backward compat with pre-v0.2 dedup outputs).
+    """
+    sidecar_path = None
+
+    if explicit_sidecar_path is not None:
+        p = Path(explicit_sidecar_path)
+        if p.exists():
+            sidecar_path = p
+        else:
+            logger.warning(
+                "dedup_accessions_tsv=%s does not exist; skipping sidecar propagation.",
+                explicit_sidecar_path,
+            )
+            return {}
+    else:
+        # Auto-discovery: strip ".protein.fasta" and look for ".accessions.tsv"
+        stem = protein_fasta_path.name
+        for suffix in (".protein.fasta", ".fasta"):
+            if stem.endswith(suffix):
+                base_name = stem[: -len(suffix)]
+                candidate = protein_fasta_path.parent / f"{base_name}.accessions.tsv"
+                if candidate.exists():
+                    sidecar_path = candidate
+                    break
+
+    if sidecar_path is None:
+        return {}
+
+    df = pd.read_csv(sidecar_path, sep="\t")
+    if "accession" not in df.columns or "original_header" not in df.columns:
+        logger.warning(
+            "Sidecar %s is missing required columns (accession, original_header); "
+            "skipping sidecar propagation.",
+            sidecar_path,
+        )
+        return {}
+
+    logger.info("Loaded %d original headers from dedup sidecar %s.", len(df), sidecar_path)
+    return dict(zip(df["accession"].astype(str), df["original_header"].astype(str)))
 
 
 def load_fasta_sequences(
@@ -288,6 +348,7 @@ def run(
     device: Optional[str] = None,
     truncate: bool = False,
     id_strategy: IDStrategy = IDStrategy.AUTO,
+    dedup_accessions_tsv: Optional[str | Path] = None,
 ) -> tuple[np.ndarray, list[str]]:
     """
     Full embed workflow: load protein FASTA, embed, write outputs.
@@ -295,10 +356,13 @@ def run(
     Outputs created:
         <output_npy>                           — (N, embed_dim) embedding matrix
         <output_npy>.accession_order.txt       — one accession per line, matching matrix rows
+        <output_npy>.accessions.tsv            — accession ↔ original_header mapping,
+                                                 one row per matrix row (only written if
+                                                 a dedup sidecar is available upstream)
         <output_npy>.embed_log.json            — model, device, runtime metadata
 
     Args:
-        input_fasta: path to a protein FASTA (from `envoy qc` or user-supplied)
+        input_fasta: path to a protein FASTA (from `envoy dedup` or user-supplied)
         output_npy: path for the .npy embedding matrix
         model: ESM-2 variant to use
         batch_size: batch size (reduce if OOM)
@@ -306,6 +370,10 @@ def run(
         device: force a device; None = auto-detect
         truncate: if True, allow sequences longer than max_length to be truncated
         id_strategy: FASTA header normalization strategy
+        dedup_accessions_tsv: explicit path to the upstream dedup sidecar. If None,
+            embed auto-discovers <stem>.accessions.tsv alongside input_fasta. If
+            found and valid, propagates it forward as <output_npy>.accessions.tsv.
+            Omitted outputs if no sidecar is available (backward compat).
 
     Returns:
         (embeddings, accessions) — the matrix and matching accessions in order
@@ -315,6 +383,14 @@ def run(
 
     output_npy = Path(output_npy)
     output_npy.parent.mkdir(parents=True, exist_ok=True)
+    input_fasta_path = Path(input_fasta)
+
+    # Load the dedup sidecar (if available) BEFORE sequence loading, so we can
+    # warn immediately if the explicit path is wrong rather than after embedding.
+    original_headers = _load_dedup_sidecar(
+        input_fasta_path,
+        Path(dedup_accessions_tsv) if dedup_accessions_tsv is not None else None,
+    )
 
     accessions, sequences = load_fasta_sequences(input_fasta, id_strategy)
 
@@ -331,11 +407,22 @@ def run(
     # Write embedding matrix
     np.save(output_npy, embeddings)
 
-    # Write accession-order file
+    # Write accession-order file (unchanged)
     accession_order_path = output_npy.with_suffix(".accession_order.txt")
     with open(accession_order_path, "w") as fh:
         for acc in accessions:
             fh.write(f"{acc}\n")
+
+    # Write accessions sidecar (new) — only if we have original headers to propagate
+    sidecar_path: Optional[Path] = None
+    if original_headers:
+        sidecar_path = output_npy.with_suffix(".accessions.tsv")
+        sidecar_rows = [
+            {"accession": acc, "original_header": original_headers.get(acc, acc)}
+            for acc in accessions
+        ]
+        pd.DataFrame(sidecar_rows).to_csv(sidecar_path, sep="\t", index=False)
+        logger.info("Wrote accessions sidecar: %s", sidecar_path)
 
     # Write log
     log = {
@@ -353,6 +440,7 @@ def run(
         "matrix_dtype": str(embeddings.dtype),
         "matrix_mean": float(embeddings.mean()),
         "matrix_std": float(embeddings.std()),
+        "original_headers_preserved": bool(original_headers),
     }
     log_path = output_npy.with_suffix(".embed_log.json")
     with open(log_path, "w") as fh:

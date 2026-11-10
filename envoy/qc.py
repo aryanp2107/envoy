@@ -10,6 +10,9 @@ Six gates applied in order:
     Gate 5: hypermut (hard) — Fisher's exact p < 0.05 with GpR-biased direction
 
 Permissive by design: optimized across 11 HIV-1 clades for 85-95% pass rates.
+
+Original headers are preserved alongside normalized accessions so downstream
+users can trace medoids back to the LANL/GenBank study of origin.
 """
 
 from __future__ import annotations
@@ -46,6 +49,7 @@ GROUP_P_INDICATORS = ["P_", "/P.", "GROUP_P"]
 class QCRecord:
     """Per-sequence QC result."""
     accession: str
+    original_header: str
     env_nt_length: int
     env_coverage_confidence: str  # "high", "medium", "low"
     protein_length: int
@@ -132,8 +136,15 @@ def run_gates(
     Outputs created in output_dir:
         <clade>.qc_pass.fasta           — nucleotide FASTA of passing sequences
         <clade>.qc_pass.protein.fasta   — translated protein FASTA
-        <clade>.qc_pass.metadata.csv    — per-sequence QC results (all input rows)
+        <clade>.qc_pass.metadata.csv    — per-sequence QC results (all input rows,
+                                          including the original_header column for
+                                          study traceability)
         <clade>.qc_summary.json         — aggregate pass/fail statistics
+
+    Note: FASTA headers in the two output FASTAs use the normalized accession
+    (clean for internal joins). The original header is preserved in
+    qc_pass.metadata.csv and carried through dedup/embed/cluster so medoids
+    can be traced to their LANL/GenBank study.
 
     Returns:
         DataFrame of QC records (one row per input sequence).
@@ -142,11 +153,13 @@ def run_gates(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read input sequences with configurable ID normalization
+    # Read input sequences — capture both normalized accession and original header
     sequences: dict[str, str] = {}
+    original_headers: dict[str, str] = {}
     for rec in SeqIO.parse(str(input_fasta), "fasta"):
         acc = normalize_accession(rec.description, id_strategy)
         sequences[acc] = str(rec.seq).upper()
+        original_headers[acc] = rec.description
 
     # Gates 6, 1, 2, 3, 4 per sequence
     records = []
@@ -154,6 +167,7 @@ def run_gates(
     nt_pass: dict[str, str] = {}
 
     for acc, nt in sequences.items():
+        orig_hdr = original_headers[acc]
         flags = []
 
         # Gate 6: group check
@@ -161,7 +175,8 @@ def run_gates(
         if group is not None:
             flags.append(f"group_{group}")
             records.append(QCRecord(
-                accession=acc, env_nt_length=len(nt), env_coverage_confidence="low",
+                accession=acc, original_header=orig_hdr,
+                env_nt_length=len(nt), env_coverage_confidence="low",
                 protein_length=0, n_internal_stops=0, has_start_met=False,
                 hypermut_pvalue=1.0, ambiguity_pct=_compute_ambiguity_pct(nt),
                 flags=",".join(flags), passed=False,
@@ -173,7 +188,8 @@ def run_gates(
         if nt_len < MIN_ENV_COVERAGE_NT:
             flags.append(f"env_too_short_{nt_len}nt")
             records.append(QCRecord(
-                accession=acc, env_nt_length=nt_len, env_coverage_confidence="low",
+                accession=acc, original_header=orig_hdr,
+                env_nt_length=nt_len, env_coverage_confidence="low",
                 protein_length=0, n_internal_stops=0, has_start_met=False,
                 hypermut_pvalue=1.0, ambiguity_pct=_compute_ambiguity_pct(nt),
                 flags=",".join(flags), passed=False,
@@ -187,7 +203,8 @@ def run_gates(
         if prot_len < MIN_PROTEIN_LEN_AA or prot_len > MAX_PROTEIN_LEN_AA:
             flags.append(f"protein_len_out_of_range_{prot_len}aa")
             records.append(QCRecord(
-                accession=acc, env_nt_length=nt_len, env_coverage_confidence=coverage_conf,
+                accession=acc, original_header=orig_hdr,
+                env_nt_length=nt_len, env_coverage_confidence=coverage_conf,
                 protein_length=prot_len, n_internal_stops=n_stops, has_start_met=False,
                 hypermut_pvalue=1.0, ambiguity_pct=_compute_ambiguity_pct(nt),
                 flags=",".join(flags), passed=False,
@@ -196,7 +213,8 @@ def run_gates(
         if n_stops > MAX_INTERNAL_STOPS:
             flags.append(f"too_many_stops_{n_stops}")
             records.append(QCRecord(
-                accession=acc, env_nt_length=nt_len, env_coverage_confidence=coverage_conf,
+                accession=acc, original_header=orig_hdr,
+                env_nt_length=nt_len, env_coverage_confidence=coverage_conf,
                 protein_length=prot_len, n_internal_stops=n_stops, has_start_met=False,
                 hypermut_pvalue=1.0, ambiguity_pct=_compute_ambiguity_pct(nt),
                 flags=",".join(flags), passed=False,
@@ -219,7 +237,8 @@ def run_gates(
         proteins[acc] = protein
         nt_pass[acc] = nt
         records.append(QCRecord(
-            accession=acc, env_nt_length=nt_len, env_coverage_confidence=coverage_conf,
+            accession=acc, original_header=orig_hdr,
+            env_nt_length=nt_len, env_coverage_confidence=coverage_conf,
             protein_length=prot_len, n_internal_stops=n_stops, has_start_met=has_start_m,
             hypermut_pvalue=-1.0,  # placeholder, filled by Gate 5
             ambiguity_pct=ambig_pct, flags=",".join(flags), passed=True,
@@ -262,6 +281,8 @@ def run_gates(
     metadata_path = output_dir / f"{clade}.qc_pass.metadata.csv"
     df.to_csv(metadata_path, index=False)
 
+    # Output FASTAs use normalized accessions (for internal joins).
+    # The original_header is preserved in qc_pass.metadata.csv for lookup.
     nt_path = output_dir / f"{clade}.qc_pass.fasta"
     with open(nt_path, "w") as fh:
         for acc, seq in final_nt.items():

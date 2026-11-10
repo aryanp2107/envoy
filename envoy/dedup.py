@@ -6,6 +6,9 @@ parses the .clstr output, applies three smart-pick rules in priority order:
     1. Prefer cluster members with populated patient codes
     2. Prefer non-AMP breakthrough sequences
     3. Longest sequence as tiebreaker
+
+Original headers from the QC-passed FASTA are preserved alongside normalized
+accessions in <clade>.cdhit98.accessions.tsv for downstream study traceability.
 """
 
 from __future__ import annotations
@@ -72,6 +75,26 @@ def _parse_clstr(clstr_path: Path, id_strategy: IDStrategy = IDStrategy.AUTO) ->
     return clusters
 
 
+def _load_original_headers(
+    qc_metadata_csv: Optional[Path],
+) -> dict[str, str]:
+    """
+    Load the accession → original_header map from the QC metadata CSV.
+
+    Returns empty dict if the file doesn't exist or has no original_header column
+    (backward compat with pre-v0.2 QC outputs). Only sequences that PASSED QC
+    are returned (so this map is always a superset of what dedup sees as input).
+    """
+    if qc_metadata_csv is None or not Path(qc_metadata_csv).exists():
+        return {}
+    df = pd.read_csv(qc_metadata_csv)
+    if "original_header" not in df.columns:
+        return {}
+    if "passed" in df.columns:
+        df = df[df["passed"]]
+    return dict(zip(df["accession"].astype(str), df["original_header"].astype(str)))
+
+
 def _smart_pick(members: list[tuple[str, int]], metadata: pd.DataFrame,
                 acc_col: str, patient_col: Optional[str], name_col: Optional[str]) -> tuple[str, str]:
     """
@@ -135,6 +158,7 @@ def run(
     identity_threshold: float = 0.98,
     n_threads: int = 4,
     id_strategy: IDStrategy = IDStrategy.AUTO,
+    qc_metadata_csv: Optional[str | Path] = None,
 ) -> pd.DataFrame:
     """
     Run CD-HIT-EST deduplication with smart-pick representative selection.
@@ -148,13 +172,21 @@ def run(
         output_dir: directory to write deduplicated outputs
         identity_threshold: CD-HIT identity threshold (default 0.98)
         n_threads: CPU threads for CD-HIT
+        id_strategy: accession normalization strategy
+        qc_metadata_csv: optional path to <clade>.qc_pass.metadata.csv from the
+            QC step. If provided and the file contains an original_header column,
+            dedup emits <clade>.cdhit98.accessions.tsv with accession ↔
+            original_header mapping for downstream study traceability.
 
     Outputs:
-        <clade>.cdhit98.fasta           — representative nucleotide sequences
-        <clade>.cdhit98.protein.fasta   — matched representative proteins
-        <clade>.cdhit98.metadata.csv    — filtered metadata for representatives
-        <clade>.cdhit98.clstr           — CD-HIT cluster log
-        <clade>.dedup_audit.json        — collapse stats and smart-pick decisions
+        <clade>.cdhit98.fasta            — representative nucleotide sequences
+        <clade>.cdhit98.protein.fasta    — matched representative proteins
+        <clade>.cdhit98.metadata.csv     — filtered metadata for representatives
+        <clade>.cdhit98.clstr            — CD-HIT cluster log
+        <clade>.cdhit98.accessions.tsv   — accession ↔ original_header ↔
+                                           cluster_size sidecar (if QC metadata
+                                           provided with original_header column)
+        <clade>.dedup_audit.json         — collapse stats and smart-pick decisions
 
     Returns:
         DataFrame of representative metadata.
@@ -168,6 +200,11 @@ def run(
     input_nt_fasta = Path(input_nt_fasta)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Load accession → original_header map from QC step (if provided)
+    original_headers = _load_original_headers(
+        Path(qc_metadata_csv) if qc_metadata_csv is not None else None
+    )
 
     cdhit_out = output_dir / f"{clade}.cdhit98.fasta"
     cdhit_clstr = output_dir / f"{clade}.cdhit98.fasta.clstr"
@@ -218,6 +255,7 @@ def run(
 
     collapses: list[ClusterCollapse] = []
     representatives: list[str] = []
+    rep_cluster_sizes: dict[str, int] = {}  # accession → cluster_size it represents
     for cluster_id, members in enumerate(clusters_raw):
         if len(members) == 1:
             rep = members[0][0]
@@ -226,6 +264,7 @@ def run(
                 members=[rep], smart_pick_reason="singleton",
             ))
             representatives.append(rep)
+            rep_cluster_sizes[rep] = 1
             continue
         rep, reason = _smart_pick(members, raw_meta, acc_col, patient_col, name_col)
         collapses.append(ClusterCollapse(
@@ -234,6 +273,7 @@ def run(
             smart_pick_reason=reason,
         ))
         representatives.append(rep)
+        rep_cluster_sizes[rep] = len(members)
 
     # Rewrite cdhit_out FASTA to contain the smart-picked representatives
     # (CD-HIT by default picks the longest; our smart-pick may differ)
@@ -264,6 +304,18 @@ def run(
     meta_out = output_dir / f"{clade}.cdhit98.metadata.csv"
     filtered_meta.to_csv(meta_out, index=False)
 
+    # Accessions sidecar — only written if we have original headers to preserve
+    if original_headers:
+        sidecar_path = output_dir / f"{clade}.cdhit98.accessions.tsv"
+        sidecar_rows = []
+        for rep in representatives:
+            sidecar_rows.append({
+                "accession": rep,
+                "original_header": original_headers.get(rep, rep),
+                "cluster_size": rep_cluster_sizes.get(rep, 1),
+            })
+        pd.DataFrame(sidecar_rows).to_csv(sidecar_path, sep="\t", index=False)
+
     # Audit JSON
     n_in = sum(len(c.members) for c in collapses)
     n_out = len(collapses)
@@ -277,6 +329,7 @@ def run(
         "n_multimembers": sum(1 for c in collapses if c.n_members > 1),
         "largest_cluster_size": max(c.n_members for c in collapses) if collapses else 0,
         "smart_pick_reasons": {},  # populated below
+        "original_headers_preserved": bool(original_headers),
     }
     reason_counts: dict[str, int] = {}
     for c in collapses:

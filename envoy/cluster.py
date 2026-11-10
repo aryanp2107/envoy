@@ -8,6 +8,12 @@ The core clustering workflow:
     4. Compute silhouette, nearest-medoid, and inertia metrics
     5. Select N+2 backup sequences per medoid for wet-lab redundancy
     6. Report MAFFT-aligned pairwise identity between deployment medoids
+
+    Original headers from upstream embed (if the <npy>.accessions.tsv sidecar is
+present) are propagated into the deployment CSVs and medoids.fasta for study
+traceability. Internal joins still use normalized accessions; original headers
+are reference-only fields.
+
 """
 
 from __future__ import annotations
@@ -641,20 +647,75 @@ def compute_pairwise_identity(
 # I/O helpers for the CLI layer
 # ============================================================================
 
+def load_original_headers(
+    npy_path: str | Path,
+    accessions: list[str],
+) -> Optional[list[str]]:
+    """
+    Load original headers from the <npy_stem>.accessions.tsv sidecar if it exists.
+
+    Returns a list of original_headers in the same order as `accessions` (used to
+    verify the sidecar matches the embedding row order). Returns None if the
+    sidecar is absent (backward compat with pre-v0.2 embed outputs).
+
+    Args:
+        npy_path: path to the .npy embedding matrix
+        accessions: list of accessions in matrix-row order (from load_embeddings)
+
+    Returns:
+        List of original_headers matching the accession order, or None if no sidecar.
+    """
+    npy_path = Path(npy_path)
+    sidecar_path = npy_path.with_suffix(".accessions.tsv")
+
+    if not sidecar_path.exists():
+        return None
+
+    df = pd.read_csv(sidecar_path, sep="\t")
+    if "accession" not in df.columns or "original_header" not in df.columns:
+        logger.warning(
+            "Sidecar %s is missing required columns; ignoring.", sidecar_path
+        )
+        return None
+
+    header_map = dict(zip(df["accession"].astype(str), df["original_header"].astype(str)))
+
+    # Build the list in accession order; use accession as fallback for any gaps
+    result = [header_map.get(acc, acc) for acc in accessions]
+    n_missing = sum(1 for acc in accessions if acc not in header_map)
+    if n_missing:
+        logger.warning(
+            "Sidecar %s missing original_header for %d/%d accessions; using accession as fallback.",
+            sidecar_path, n_missing, len(accessions),
+        )
+    return result
+
 
 def load_embeddings(
     npy_path: str | Path,
     accession_order_path: Optional[str | Path] = None,
     id_strategy: IDStrategy = IDStrategy.AUTO,
-) -> tuple[np.ndarray, list[str]]:
+    return_headers: bool = False,
+) -> tuple[np.ndarray, list[str]] | tuple[np.ndarray, list[str], Optional[list[str]]]:
     """
     Load an embedding .npy and matching accession-order file.
 
     If accession_order_path is None, it's inferred from npy_path by replacing
     the .npy extension with .accession_order.txt.
 
+    Args:
+        npy_path: path to the .npy embedding matrix
+        accession_order_path: path to accession order file (auto-inferred if None)
+        id_strategy: accession normalization strategy
+        return_headers: if True, also return original_headers list from the
+            <npy_stem>.accessions.tsv sidecar (or None if sidecar absent).
+            When False (default), returns the standard 2-tuple for backward compat.
+
     Returns:
-        (embeddings, accessions) — matrix and matching accession list in order.
+        (embeddings, accessions) if return_headers=False (default).
+        (embeddings, accessions, original_headers) if return_headers=True;
+        original_headers is a list of same length as accessions, or None if
+        no sidecar exists.
     """
     npy_path = Path(npy_path)
     embeddings = np.load(npy_path)
@@ -677,7 +738,12 @@ def load_embeddings(
             f"Embedding rows ({embeddings.shape[0]}) does not match "
             f"accession count ({len(accessions)})"
         )
+
+    if return_headers:
+        original_headers = load_original_headers(npy_path, accessions)
+        return embeddings, accessions, original_headers
     return embeddings, accessions
+
 
 
 def load_protein_fasta(
@@ -743,44 +809,70 @@ def write_deployment_panel(
     accessions: list[str],
     protein_seqs: Optional[dict[str, str]],
     output_dir: str | Path,
+    original_headers: Optional[dict[str, str]] = None,
 ) -> None:
-    """Write deployment medoids, backups, and derived outputs."""
+    """
+    Write deployment medoids, backups, and derived outputs.
+
+    Args:
+        panel: the DeploymentPanel produced by run()
+        accessions: full accession list in embedding order
+        protein_seqs: optional dict for medoids.fasta writing
+        output_dir: directory to write outputs
+        original_headers: optional dict mapping accession → original_header.
+            When provided, an original_header column is added to medoids.csv,
+            backups.csv, and assignments.csv, and medoids.fasta uses original
+            headers in the >lines (falling back to accession if not found).
+    """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Medoids CSV
     medoid_rows = []
     for cluster_id, medoid_acc in enumerate(panel.medoid_accessions):
-        medoid_rows.append({
+        row = {
             "cluster_id": cluster_id,
             "medoid_accession": medoid_acc,
             "cluster_size": sum(1 for v in panel.cluster_assignments.values() if v == cluster_id),
-        })
+        }
+        if original_headers is not None:
+            row["original_header"] = original_headers.get(medoid_acc, medoid_acc)
+        medoid_rows.append(row)
     pd.DataFrame(medoid_rows).to_csv(output_dir / "medoids.csv", index=False)
 
     # Backups CSV
     backup_rows = []
     for cluster_id, backups in panel.backups_per_cluster.items():
         for rank, acc in enumerate(backups):
-            backup_rows.append({
+            row = {
                 "cluster_id": cluster_id,
                 "backup_rank": rank + 1,
                 "backup_accession": acc,
-            })
+            }
+            if original_headers is not None:
+                row["original_header"] = original_headers.get(acc, acc)
+            backup_rows.append(row)
     pd.DataFrame(backup_rows).to_csv(output_dir / "backups.csv", index=False)
 
     # Assignments CSV
-    pd.DataFrame([
-        {"accession": acc, "cluster_id": cid}
-        for acc, cid in panel.cluster_assignments.items()
-    ]).to_csv(output_dir / "assignments.csv", index=False)
+    assignment_rows = []
+    for acc, cid in panel.cluster_assignments.items():
+        row = {"accession": acc, "cluster_id": cid}
+        if original_headers is not None:
+            row["original_header"] = original_headers.get(acc, acc)
+        assignment_rows.append(row)
+    pd.DataFrame(assignment_rows).to_csv(output_dir / "assignments.csv", index=False)
 
     # Medoids FASTA (if protein sequences supplied)
     if protein_seqs is not None:
         with open(output_dir / "medoids.fasta", "w") as fh:
             for cluster_id, medoid_acc in enumerate(panel.medoid_accessions):
                 if medoid_acc in protein_seqs:
-                    fh.write(f">{medoid_acc} cluster={cluster_id}\n{protein_seqs[medoid_acc]}\n")
+                    if original_headers is not None:
+                        header = original_headers.get(medoid_acc, medoid_acc)
+                        fh.write(f">{header} cluster={cluster_id} accession={medoid_acc}\n{protein_seqs[medoid_acc]}\n")
+                    else:
+                        fh.write(f">{medoid_acc} cluster={cluster_id}\n{protein_seqs[medoid_acc]}\n")
 
     # Metrics JSON
     metrics_dict = asdict(panel.metrics)
@@ -838,10 +930,27 @@ def run(
     if k not in k_sweep_values:
         k_sweep_values = sorted(set(k_sweep_values + [k]))
 
-    embeddings, accessions = load_embeddings(embeddings_path, id_strategy=id_strategy)
+    embeddings, accessions, original_headers_list = load_embeddings(
+    embeddings_path, id_strategy=id_strategy, return_headers=True,
+)
     n = len(accessions)
     logger.info("Loaded %d sequences, embedding dim %d", n, embeddings.shape[1])
 
+        # Load embeddings AND original headers (if sidecar present)
+    embeddings, accessions, original_headers_list = load_embeddings(
+        embeddings_path, id_strategy=id_strategy, return_headers=True,
+    )
+    n = len(accessions)
+    logger.info("Loaded %d sequences, embedding dim %d", n, embeddings.shape[1])
+
+    # Build accession → original_header dict for write_deployment_panel
+    original_headers_dict: Optional[dict[str, str]] = None
+    if original_headers_list is not None:
+        original_headers_dict = dict(zip(accessions, original_headers_list))
+        logger.info(
+            "Loaded original headers for %d sequences from embed sidecar.",
+            len(original_headers_dict),
+        )
     # k-sweep
     sweep = run_k_sweep(
         embeddings=embeddings,
@@ -901,7 +1010,8 @@ def run(
         pairwise_identity=pairwise_id,
     )
 
-    write_deployment_panel(panel, accessions, protein_seqs, deploy_dir)
+    write_deployment_panel(panel, accessions, protein_seqs, deploy_dir,
+                      original_headers=original_headers_dict)
 
     logger.info("Deployment panel written to %s", deploy_dir)
     return panel
