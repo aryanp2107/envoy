@@ -107,7 +107,7 @@ def plot_sweep_metrics(
         label=f"Deployment k={deployment_k}",
     )
     ax.axvspan(overcluster_threshold, sweep_df["k"].max() + 1, color=OVERCLUSTER_COLOR, alpha=0.08)
-    ax.set_title("Silhouette vs k   (higher is better)", fontsize=11)
+    ax.set_title("Silhouette vs k", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("Silhouette")
     ax.grid(True, alpha=GRID_ALPHA)
@@ -143,7 +143,7 @@ def plot_sweep_metrics(
         )
     ax.axvline(deployment_k, color=DEPLOY_LINE_COLOR, linestyle=":", linewidth=1.2)
     ax.axvspan(overcluster_threshold, sweep_df["k"].max() + 1, color=OVERCLUSTER_COLOR, alpha=0.08)
-    ax.set_title("Coverage vs k   (lower is better)", fontsize=11)
+    ax.set_title("Coverage vs k", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("Mean nearest-medoid distance")
     ax.grid(True, alpha=GRID_ALPHA)
@@ -212,7 +212,7 @@ def plot_sweep_metrics(
         alpha=0.08,
         label="k > N/4 (overcluster)",
     )
-    ax.set_title("Inertia vs k   (lower is better)", fontsize=11)
+    ax.set_title("Inertia vs k", fontsize=11)
     ax.set_xlabel("k")
     ax.set_ylabel("Total inertia")
     ax.grid(True, alpha=GRID_ALPHA)
@@ -271,11 +271,10 @@ def plot_pca_2x2(
     ax.scatter(
         pcs[medoid_indices, 0],
         pcs[medoid_indices, 1],
-        marker="*",
-        s=180,
-        color="black",
-        label=f"{k} medoids",
-        zorder=5,
+        marker="o",
+        s=140,
+        edgecolors="black", linewidths=2.0,
+        label=f"{k} medoids", zorder=5,
     )
     ax.set_xlabel(f"PC1 ({var[0]:.1f}%)")
     ax.set_ylabel(f"PC2 ({var[1]:.1f}%)")
@@ -289,9 +288,9 @@ def plot_pca_2x2(
     ax.scatter(
         pcs[medoid_indices, 0],
         pcs[medoid_indices, 2],
-        marker="*",
-        s=180,
-        color="black",
+        marker="o",
+        s=140,
+        edgecolors="black", linewidths=2.0,
         label=f"{k} medoids",
         zorder=5,
     )
@@ -307,9 +306,9 @@ def plot_pca_2x2(
     ax.scatter(
         pcs[medoid_indices, 1],
         pcs[medoid_indices, 2],
-        marker="*",
-        s=180,
-        color="black",
+        marker="o",
+        s=140,
+        edgecolors="black", linewidths=2.0,
         label=f"{k} medoids",
         zorder=5,
     )
@@ -458,23 +457,55 @@ def plot_dendrogram(
         labels.append(f"{prefix}{acc}")
         label_colors[acc] = cmap(c % 20)
 
-    height = max(6, min(0.12 * len(display_idx), 24))
-    fig, ax = plt.subplots(figsize=(max(14, 0.3 * len(display_idx)), height))
+    # Compute linkage heights for scale-aware Y-axis
+    heights = linkage_matrix[:, 2]
+    y_main = float(np.percentile(heights, 95))  # main tree ceiling, excludes outliers
+    y_max = float(heights.max())
+    y_has_outliers = y_max > y_main * 1.5
+
+    # Figure sizing: horizontal dendrogram for small N, vertical for large
+    use_horizontal = len(display_idx) <= 100
+    n_leaves = len(display_idx)
+
+    if use_horizontal:
+        # Horizontal: leaves run down the y-axis, dendrogram extends left
+        width = max(10, y_main * 400)  # proportional to data range
+        height = max(6, 0.22 * n_leaves)
+    else:
+        width = max(14, 0.3 * n_leaves)
+        height = max(6, y_main * 400)
+
+    fig, ax = plt.subplots(figsize=(width, height))
     with plt.rc_context({"lines.linewidth": 0.8}):
         dendrogram(
             linkage_matrix,
             labels=labels,
-            leaf_rotation=90,
-            leaf_font_size=7,
-            color_threshold=0,  # uniform gray branches
+            leaf_rotation=0 if use_horizontal else 90,
+            leaf_font_size=8,
+            color_threshold=0,
             above_threshold_color="#888888",
             ax=ax,
+            orientation="left" if use_horizontal else "top",
         )
 
-    # Re-color x-tick labels per cluster
-    for lbl in ax.get_xticklabels():
+    # Clip the scale axis to main tree; annotate if outliers were clipped
+    if use_horizontal:
+        scale_axis_set = ax.set_xlim
+        scale_axis_label = ax.set_xlabel
+        scale_axis_label_text = "Cosine distance (average linkage)"
+        ax.set_xlim(0, y_main * 1.05)
+    else:
+        scale_axis_set = ax.set_ylim
+        scale_axis_label = ax.set_ylabel
+        scale_axis_label_text = "Cosine distance (average linkage)"
+        ax.set_ylim(0, y_main * 1.05)
+
+    scale_axis_label(scale_axis_label_text)
+
+    # Re-color tick labels per cluster
+    tick_labels = ax.get_yticklabels() if use_horizontal else ax.get_xticklabels()
+    for lbl in tick_labels:
         txt = lbl.get_text()
-        # Strip prefix ("* " or "  ")
         acc = txt.lstrip("*").strip()
         if acc in label_colors:
             lbl.set_color(label_colors[acc])
@@ -482,13 +513,16 @@ def plot_dendrogram(
             lbl.set_fontweight("bold")
 
     suffix = f": {dataset_name}" if dataset_name else ""
-    title = f"UPGMA dendrogram{suffix}, k={k}, medoids marked with *" + (
-        f"\n(down-sampled: showing {len(display_idx)} of {n} leaves, all medoids kept)"
-        if len(display_idx) < n
-        else ""
-    )
-    ax.set_title(title, fontsize=11)
-    ax.set_ylabel("Cosine distance (UPGMA average linkage)")
+    title_bits = [f"UPGMA dendrogram{suffix}", f"k={k}", "medoids = *"]
+    if len(display_idx) < n:
+        title_bits.append(f"showing {len(display_idx)} of {n} leaves")
+    if y_has_outliers:
+        logger.debug(
+            "Dendrogram y-axis clipped at p95=%.4f (max in data was %.4f)",
+            y_main, y_max,
+        )
+    ax.set_title("  |  ".join(title_bits), fontsize=11)
+
     fig.tight_layout()
     fig.savefig(output_path, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
