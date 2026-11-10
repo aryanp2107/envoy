@@ -100,6 +100,11 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "N", "UP"]
 ignore = ["E501"]  # line length handled by black
 
+[tool.ruff.lint.per-file-ignores]
+# Distance matrices by convention use capital letters (D, D_sub) matching math notation
+"envoy/figures.py" = ["N806"]
+"envoy/cluster.py" = ["N806"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
