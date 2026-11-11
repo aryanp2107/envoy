@@ -270,6 +270,57 @@ footer.page-foot a { color: var(--link); }
   .main .figrow { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ---------- MOBILE HARDENING (add at end of <style>) ---------- */
+
+/* 1. Kill horizontal scroll at the root */
+html, body { max-width: 100%; overflow-x: hidden; }
+
+/* 2. Every image stays inside its container, never pushes width */
+img, figure img, .main img, svg { max-width: 100%; height: auto; }
+
+/* 3. Code blocks scroll internally instead of stretching the page */
+pre, pre.cmd { max-width: 100%; overflow-x: auto; white-space: pre; }
+
+/* 4. iPhone notch / Android gesture bar: keep content clear */
+.topstrip { padding-top: env(safe-area-inset-top, 0px); }
+footer.page-foot { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+
+/* 5. Tablet (≤ 960px): collapse the two-column body earlier */
+@media (max-width: 960px) {
+  .columns { grid-template-columns: 1fr; gap: 20px; padding: 20px; }
+  .rail { margin-top: 8px; }
+  .main .figrow { grid-template-columns: 1fr 1fr; gap: 12px; }
+}
+
+/* 6. Phone (≤ 640px): stack everything, shrink the header */
+@media (max-width: 640px) {
+  .topstrip .logo-panel { padding: 8px 12px; }
+  .topstrip .logo-panel .envoy-logo { width: 110px; }
+  .topstrip .title-area { padding: 0 12px; }
+  .topstrip .meta { font-size: 11px; }
+
+  .ribbon { padding: 6px 12px; gap: 10px; font-size: 12.5px; }
+  .status-banner { padding: 10px 12px; font-size: 12.5px; }
+
+  .columns { padding: 14px; gap: 18px; }
+  .main h1 { font-size: 20px; }
+  .main h2 { font-size: 14px; padding: 5px 10px; }
+  .main p, .main li { font-size: 13.5px; }
+
+  .main .figrow { grid-template-columns: 1fr; gap: 10px; }
+  .stats { grid-template-columns: repeat(2, 1fr); }
+  .stats dt { font-size: 20px; }
+
+  footer.page-foot { padding: 12px 14px; gap: 12px; font-size: 11.5px; }
+}
+
+/* 7. Tiny phones (≤ 380px, e.g. iPhone SE): one-column stats */
+@media (max-width: 380px) {
+  .stats { grid-template-columns: 1fr; }
+  .topstrip .logo-panel .envoy-logo { width: 96px; }
+}
+  
 </style>
 </head>
 <body>
