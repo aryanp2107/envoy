@@ -13,6 +13,9 @@ Usage:
     envoy cluster --embeddings embed/X.npy --output cluster/ --k 20 \\
                   --protein dedup/X.cdhit98.protein.fasta
     envoy figures --deployment cluster/ --output cluster/figures/ --dataset-name X
+    envoy compare --output comparison/ \\
+                  CRF08_BC:cluster_outputs/CRF08_BC \\
+                  A6:cluster_outputs/A6
 """
 
 from __future__ import annotations
@@ -48,12 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
     from envoy.cli import embed as embed_cli
     from envoy.cli import cluster as cluster_cli
     from envoy.cli import figures as figures_cli
+    from envoy.cli import compare as compare_cli
 
     qc_cli.register(subparsers)
     dedup_cli.register(subparsers)
     embed_cli.register(subparsers)
     cluster_cli.register(subparsers)
     figures_cli.register(subparsers)
+    compare_cli.register(subparsers)
 
     return parser
 
