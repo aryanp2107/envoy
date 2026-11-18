@@ -36,7 +36,7 @@ HXB2_ENV_END = 8795
 HXB2_ENV_LENGTH = HXB2_ENV_END - HXB2_ENV_START + 1  # 2571 nt
 
 MIN_ENV_COVERAGE_NT = 2000
-MIN_PROTEIN_LEN_AA = 600
+MIN_PROTEIN_LEN_AA = 700
 MAX_PROTEIN_LEN_AA = 900
 MAX_INTERNAL_STOPS = 2
 
@@ -226,12 +226,6 @@ def run_gates(
         if not has_start_m:
             flags.append("no_start_met")
 
-        # Gate 4: ambiguity (informational)
-        ambig_pct = _compute_ambiguity_pct(nt)
-        if ambig_pct > 5:
-            flags.append(f"ambiguity_over_5pct_{ambig_pct:.1f}")
-        if ambig_pct > 10:
-            flags.append(f"ambiguity_over_10pct_{ambig_pct:.1f}")
 
         # Provisionally save for Gate 5 (Hypermut)
         proteins[acc] = protein
