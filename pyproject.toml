@@ -116,8 +116,6 @@ classifiers = [
     "Natural Language :: English",
 ]
 
-[project.scripts]
-envoy = "envoy.cli.main:main"
 
 [tool.black]
 line-length = 100
