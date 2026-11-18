@@ -1,0 +1,128 @@
+# ENVOY cross-clade QC gate configuration v0.1.0
+#
+# Locked 2026-11-18 — applies to all 11 clades in the v0.1.0 panel release.
+# Any change to these gates requires a config version bump and rerunning
+# affected clades, so that panel outputs across clades remain comparable
+# within a single release.
+
+version: "0.1.0"
+locked_date: "2026-11-18"
+clades_covered:
+  - A1
+  - A6
+  - B
+  - C
+  - D
+  - F1
+  - G
+  - CRF01_AE
+  - CRF02_AG
+  - CRF07_BC
+  - CRF08_BC
+
+gates:
+
+  group_m:
+    policy: hard_reject
+    exclude: [O, N, P]
+    rationale: >
+      ENVOY v0.1.0 panels address HIV-1 group M diversity only.
+      Group O/N/P sequences would require separate validation and panel
+      generation and are excluded from the M-group resource.
+
+  env_coverage:
+    policy: hard_reject
+    min_nt_length: 2000
+    rationale: >
+      Env CDS spans HXB2 nt 6225–8795 (2571 nt). The 2000-nt floor
+      allows limited 5'/3' truncation while excluding partial pulls
+      that may not cover gp120's variable loops.
+
+  translation:
+    policy: hard_reject
+    min_aa: 700
+    max_aa: 900
+    max_internal_stops: 2
+    rationale: >
+      Full-length gp160 is ~856 aa. The 700 aa floor captures signal
+      peptide, gp120 with all variable loops, and the gp41 ectodomain
+      (cleavage site at ~aa 511). Sequences shorter than 700 aa may
+      embed in a distinct region of ESM-2 embedding space from
+      full-length Env and drive spurious clustering; the floor
+      prevents that artifact. The 900 aa ceiling excludes insertions
+      or assembly artifacts producing anomalously long translations.
+      Up to 2 internal stops are tolerated to accommodate sequencing
+      errors without rejecting otherwise complete Env sequences.
+
+  start_methionine:
+    policy: soft_flag
+    rationale: >
+      Flag only. Missing start-M often reflects assembly truncation
+      rather than biological absence; flagging preserves the sequence
+      for downstream inspection while surfacing the anomaly in the
+      per-sequence metadata CSV.
+
+  ambiguity:
+    policy: informational
+    rationale: >
+      Per-sequence ambiguous-nucleotide percentage is recorded in the
+      metadata CSV for auditability but is not used as a pass/fail
+      criterion or flag. Hypermutation and translation gates already
+      remove the sequences most likely to exhibit high ambiguity;
+      adding a separate ambiguity threshold would risk compounding
+      filters with correlated failure modes.
+
+  hypermutation:
+    policy: hard_reject
+    p_threshold: 0.05
+    method: "Rose & Korber Fisher's exact (GpR-biased direction)"
+    rationale: >
+      Rejects APOBEC-induced hypermutant sequences. Sequences with
+      Fisher's exact p < 0.05 for excess GpR context substitutions
+      are removed. Per-clade LANL consensus used as the Hypermut
+      reference; see consensus_mapping below.
+    consensus_mapping:
+      A1: CONSENSUS_A1
+      A6: CONSENSUS_A1
+      B: CONSENSUS_B
+      C: CONSENSUS_C
+      D: CONSENSUS_D
+      F1: CONSENSUS_F1
+      G: CONSENSUS_G
+      CRF01_AE: CONSENSUS_01_AE
+      CRF02_AG: CONSENSUS_02_AG
+      CRF07_BC: CONSENSUS_08_BC
+      CRF08_BC: CONSENSUS_08_BC
+    fallback_notes:
+      A6: >
+        A6 is a sub-subtype of A, phylogenetically nested within the
+        A1 lineage. The Russian A6 epidemic originated from A1 founder
+        sequences and the two share the highest nucleotide identity
+        among available LANL consensus options. No A6-specific
+        consensus exists in the LANL compendium (A6 is a relatively
+        recent sub-subtype designation).
+      CRF07_BC: >
+        CRF07_BC and CRF08_BC are B/C recombinants circulating in
+        China with structurally similar breakpoint patterns in Env.
+        CRF08_BC is the only available B/C recombinant consensus in
+        the LANL compendium; a B/C mosaic consensus is a closer
+        match than either pure-subtype parent (CONSENSUS_B or
+        CONSENSUS_C alone).
+
+# Reference consensus file
+# ------------------------
+# Path: the single-file LANL compendium (e.g. lanl_consensus_env.fas)
+# supplied to `envoy qc` via --consensus. The matching entry is
+# located by name using consensus_mapping above.
+
+# Config change policy
+# --------------------
+# The gates above are frozen for the v0.1.0 panel release. Any change
+# — tightening, loosening, mapping update, threshold adjustment —
+# requires:
+#   1. A version bump on this file (v0.2.0, etc.)
+#   2. Rerunning every affected clade through `envoy qc` with the new
+#      config so that all panels in a release use identical gates
+#   3. A corresponding bump in the release tag (e.g., envoy-panels-v0.2.0)
+# This policy prevents cross-clade panels from a single release being
+# generated under drifting QC parameters.
