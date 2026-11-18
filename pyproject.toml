@@ -88,6 +88,37 @@ include = [
     "/pyproject.toml",
 ]
 
+keywords = [
+    "HIV",
+    "HIV-1",
+    "vaccine",
+    "immunogen",
+    "clustering",
+    "k-medoids",
+    "PAM",
+    "ESM-2",
+    "protein-language-model",
+    "bioinformatics",
+    "sequence-analysis",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Natural Language :: English",
+]
+
+[project.scripts]
+envoy = "envoy.cli.main:main"
+
 [tool.black]
 line-length = 100
 target-version = ["py311", "py312"]
@@ -104,6 +135,10 @@ ignore = ["E501"]  # line length handled by black
 # Distance matrices by convention use capital letters (D, D_sub) matching math notation
 "envoy/figures.py" = ["N806"]
 "envoy/cluster.py" = ["N806"]
+
+# To be added later:
+# Zenodo = "https://doi.org/10.5281/zenodo.XXXXXX"
+# Preprint = "https://www.biorxiv.org/content/..."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
