@@ -53,3 +53,17 @@ results/
 !examples/**/*.fasta
 !examples/**/*.tsv
 !examples/**/*.csv
+
+# Smoke test and run outputs — regenerable, large, not for the repo
+smoke_test_output/
+/tmp/
+
+# Stray dev files
+index.html
+
+# Standard Python junk
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/

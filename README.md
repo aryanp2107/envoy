@@ -4,12 +4,26 @@ https://aryanp2107.github.io/envoy/
 
 **E**mbedding-based selection of a**N**thentic **V**iral **O**rtholog representati**Y**es.
 
-ENVOY selects authentic representative HIV-1 Env sequences per clade using protein
-language model embeddings (ESM-2) and PAM k-medoids clustering. Unlike consensus or
-mosaic approaches that synthesize artificial sequences, ENVOY returns real sequence
-tips that retain native epistasis, quaternary trimer conformation, and real glycan
-shield — making them directly usable as immunogen candidates in prime-shape-polish
-regimens.
+ENVOY selects authentic representative HIV-1 Env sequences per clade using protein language model embeddings (ESM-2) and PAM k-medoids clustering. Unlike consensus or mosaic approaches that synthesize artificial sequences, ENVOY returns real sequence tips that preserve native epistasis, quaternary trimer conformation, and glycan shield — features lost under consensus averaging and mosaic splicing.
+
+## Why ENVOY
+
+Historical HIV-1 vaccine designs relied on synthetic representative sequences —
+arithmetic consensus (plurality voting per alignment column) and combinatorial
+mosaics (optimal 9-mer epitope tilings) — that break epistatically-coupled
+residue pairs and disrupt native quaternary Env trimer packing. These failure
+modes may have contributed to the low efficacy observed in the HVTN 705
+(Imbokodo) and HVTN 706 (Mosaico) Phase 2b trials.
+
+ENVOY selects authentic sequence tips as representatives. A real tip carries
+its own co-evolved residue pairs (epistasis preserved) and its own
+trimer-compatible conformation (quaternary structure preserved) — the
+algorithm does not reason about structure, it inherits structure from the
+evolutionary selection that produced the tip.
+
+Pre-computed panels are released for eleven HIV-1 clades spanning the global
+landscape, including Clade C (≈50% of global infections), CRF02_AG (West
+Africa), A6 (Russia/FSU), and CRF01_AE (Southeast Asia).
 
 ## Status
 
@@ -53,6 +67,40 @@ envoy embed     --input results/dedup/A6.cdhit98.protein.fasta --output results/
 envoy cluster   --embeddings results/embeddings/A6.esm2_650m.npy --dedup-dir results/dedup/A6/ --output results/clusters/A6/
 ```
 
+## Pre-computed reference panels
+
+Panels generated with ENVOY v0.1.0 against the LANL 2026-11 release.
+Each panel consists of real sequence tips selected by PAM k-medoids on
+ESM-2 650M embeddings, with N+2 backup candidates per medoid to survive
+expression failures.
+
+Panel k values follow pre-registered thresholds (n ≥ 150 → k=20; 75–149
+→ k=15; 40–74 → k=10; 20–39 → k=5). Values may adjust downward as
+post-QC counts are finalized per clade.
+
+| Clade     | n (post-QC) | Panel k | Backups | Region                          |
+|-----------|-------------|---------|---------|---------------------------------|
+| C         | pending     | 20      | +2      | Sub-Saharan Africa, India       |
+| B         | pending     | 20      | +2      | Americas, W. Europe, Australia  |
+| CRF01_AE  | pending     | 20      | +2      | Southeast Asia                  |
+| CRF02_AG  | pending     | 20      | +2      | West Africa                     |
+| A1        | pending     | 20      | +2      | East Africa                     |
+| A6        | pending     | 20      | +2      | Russia, FSU                     |
+| D         | pending     | 20      | +2      | East/Central Africa             |
+| CRF07_BC  | pending     | 20      | +2      | China                           |
+| G         | pending     | 20      | +2      | West/Central Africa             |
+| F1        | pending     | 15      | +2      | South America, Romania          |
+| CRF08_BC  | pending     | 10      | +1      | China                           |
+
+**Downloads**: panels will be released as FASTA + CSV bundles in the
+v0.1.0 GitHub release (link forthcoming), mirrored on Zenodo for a
+citable DOI. Each clade's bundle includes the medoid sequences, their
+N+2 backups, cluster assignments, and the per-clade figures (k-sweep,
+PCA 2×2, dendrogram, pairwise identity heatmap).
+
+Group O sequences (retrieved separately) are excluded from the M-group
+panel resource; a Group O panel would require its own validation.
+
 ## Pipeline stages
 
 | Command           | Purpose                                                              |
@@ -62,7 +110,7 @@ envoy cluster   --embeddings results/embeddings/A6.esm2_650m.npy --dedup-dir res
 | `envoy embed`     | ESM-2 650M mean-pool embedding (GPU-accelerated if available)        |
 | `envoy cluster`   | PAM k-medoids clustering + k-sweep + N+2 backup panel                |
 | `envoy figures`   | Per-clade and cross-clade publication figures                        |
-| `envoy divergence`| Identity-vs-embedding divergence analysis                            |
+| `envoy compare`   | Cross-clade comparison figures (optional)                            |                          |
 
 ## Input conventions
 
